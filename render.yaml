@@ -1,0 +1,94 @@
+# Render Blueprint — deploys the WHOLE monorepo as ONE service.
+#
+# The Express API (packages/api) is built together with the React app
+# (packages/web) and serves it from the same origin, so the auth cookies stay
+# first-party and "just work". Push this file to GitHub, then in Render:
+#   New +  ->  Blueprint  ->  pick this repo.
+#
+# Notes:
+#  - Render injects PORT and RENDER_EXTERNAL_URL automatically; the app reads
+#    them, so we don't hard-code them here.
+#  - `npm ci --include=dev` is required because NODE_ENV=production would
+#    otherwise make npm skip the build tools (typescript, vite, prisma, tsx).
+#  - Prisma client is generated BEFORE the TypeScript build so types resolve.
+
+services:
+  - type: web
+    name: authentication-service
+    runtime: node
+    plan: free
+    region: oregon            # change to the region closest to you
+    healthCheckPath: /health
+
+    buildCommand: >
+      npm ci --include=dev &&
+      npm run db:generate --workspace @auth/api &&
+      npm run build
+
+    # On boot: point WEB_ORIGIN/APP_URL at this service's public URL, make sure
+    # the RSA signing keys exist, apply DB migrations, then start the server.
+    startCommand: >
+      cd packages/api &&
+      export WEB_ORIGIN="$RENDER_EXTERNAL_URL" APP_URL="$RENDER_EXTERNAL_URL" &&
+      (test -f keys/private.pem || npm run keys) &&
+      (npx prisma migrate deploy || echo 'migrate skipped') &&
+      node dist/src/index.js
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Same-origin: the browser fetches the API with relative paths, so the
+      # built frontend needs an empty base URL.
+      - key: VITE_API_URL
+        value: ""
+
+      # --- JWT signing (keys live in packages/api/keys; see DEPLOY.md) ---
+      - key: JWT_PRIVATE_KEY_PATH
+        value: ./keys/private.pem
+      - key: JWT_PUBLIC_KEY_PATH
+        value: ./keys/public.pem
+      - key: JWT_ISSUER
+        value: authentication-service
+      - key: JWT_AUDIENCE
+        value: auth-clients
+
+      # HTTPS in production, so cookies must be Secure.
+      - key: COOKIE_SECURE
+        value: "true"
+
+      - key: MFA_ISSUER
+        value: Authentication Service
+
+      # Encrypts TOTP secrets at rest. Render generates a strong value ONCE and
+      # keeps it stable across deploys (so existing MFA secrets stay decryptable).
+      - key: ENCRYPTION_KEY
+        generateValue: true
+
+      # --- Secrets you set in the Render dashboard (sync:false) ---
+      - key: DATABASE_URL          # Supabase Postgres (include ?sslmode=require)
+        sync: false
+      - key: REDIS_URL             # Redis Cloud
+        sync: false
+
+      # --- Optional: OAuth social login ---
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+
+      # --- Optional: SMTP for verification / reset emails ---
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false

@@ -3,11 +3,12 @@ import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { pinoHttp } from "pino-http";
-import { env } from "./config/env";
+import { env, isProd } from "./config/env";
 import { logger } from "./lib/logger";
 import { apiRouter } from "./routes";
 import { csrf } from "./middleware/csrf";
 import { rateLimit } from "./middleware/rateLimit";
+import { serveWeb } from "./middleware/serveWeb";
 import { errorHandler } from "./middleware/errorHandler";
 import { notFound } from "./middleware/notFound";
 
@@ -37,6 +38,10 @@ export function createApp() {
   app.use(csrf);
 
   app.use("/", apiRouter);
+
+  // In production, serve the built React app from this same origin (keeps the
+  // auth cookies first-party). In dev the web is served separately by Vite.
+  if (isProd) app.use(serveWeb);
 
   // Must be last: unknown routes, then the catch-all error handler.
   app.use(notFound);
